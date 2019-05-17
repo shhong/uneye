@@ -271,8 +271,6 @@ class DNN():
             #plt.plot(Loss_train)
             #plt.title(str(epoch))
 
-            #print('Iteration: '+str(epoch)+'/'+str(self.max_iter))
-            #display.clear_output(wait=True)
 
             # test in every epoch:
             # validation loss
@@ -285,6 +283,11 @@ class DNN():
             Loss_val.append(loss_val.data.cpu().numpy())
             #plt.plot(Loss_val)
             #plt.show()
+
+            print('Iteration: '+str(epoch)+'/'+str(self.max_iter),
+                   ' Loss_train=' + str(Loss_train[-1]),
+                   ' Loss_val=' + str(Loss_val[-1]))
+            #display.clear_output(wait=True)
 
             if len(Loss_val)>3:
                 if Loss_val[-1]<float(np.mean(Loss_val[-4:-1])): #validation performance better than average over last 3
