@@ -26,27 +26,27 @@ import matplotlib.pyplot as plt
 class DNN():
     '''
     Convolutional Neural Network (U-Net Variant) for Saccade Detection
-    
+
     Parameters
     ----------
     max_iter: int, maximum number of epochs during training, default=500
-        
+
     sampfreq: {float,int}, sampling frequency of data in Hz, default=1000 Hz
-    
+
     lr: float, learning rate, default=0.001
-    
+
     weights_name: str, filename of weights to save or load, will automatically be stored and load in local folder 'training', default: 'weights'
-        
+
     min_sacc_dist: int, minimum distance between two saccades in ms for merging of saccades, default=1
-    
+
     min_sacc_dur: int, minimum saccade duration in ms for removal of small events, default=6ms
-        
+
     augmentation: bool, whether or not to use data augmentation for training. Default: True
 
     inf_correction: float, value to replace Infs occuring after differential of input signal
 
     val_samples: int, number of validation samples (for early stopping criterion)
-    
+
     doDiff: bool, whether input is differentiated or not; default: True
 
     '''
@@ -54,8 +54,8 @@ class DNN():
                  lr=0.001, weights_name='weights',
                  min_sacc_dist=1,min_sacc_dur=6,augmentation=True,
                  ks=5,mp=5,inf_correction=1.5,val_samples=30,
-                 doDiff=True):
-        
+                 doDiff=True, use_cpu=None):
+
         if max_iter<10:
             max_iter = 10
         self.max_iter = max_iter
@@ -67,7 +67,8 @@ class DNN():
         self.augmentation = augmentation
         self.mp = mp
         self.ks = ks
-        self.use_gpu = torch.cuda.is_available()
+        if use_cpu is None:
+            self.use_gpu = torch.cuda.is_available()
         self.inf_correction = inf_correction
         self.val_samples = val_samples
         self.doDiff = doDiff
@@ -75,15 +76,15 @@ class DNN():
     def train(self,X,Y,Labels,seed=1):
         '''
         Train the model according to the given training data and store the trained weights.
-        
+
         Parameters
         ----------
         X,Y: array-like, shape: (n_samples, n_timepoints), horizontal and vertical eye positions in degree
-        
+
         Labels: array-like, shape: (n_samples, n_timepoints), event labels: fixation=0, saccade=1 (other classes optional)
-        
+
         seed: int, seed for weights initialization and batch shuffling, default=1
-        
+
         '''
         # set random seed
         np.random.seed(seed)
@@ -93,10 +94,10 @@ class DNN():
         # determine number of classes
         classes = len(np.unique(Labels[np.isnan(Labels)==False]))
         self.net = UNet(classes,self.ks,self.mp)
-        
+
         print('Number of classes:',classes)
         print('Using GPU:',self.use_gpu)
-        
+
         # check if data has right dimensions (2)
         xdim,ydim,ldim = X.ndim,Y.ndim,Labels.ndim
         if any((xdim!=2,ydim!=2,ldim!=2)):
@@ -108,28 +109,28 @@ class DNN():
             Y = np.reshape(Y[:n_trials*trial_len],(n_trials,trial_len))
             Labels = np.reshape(Labels[:n_trials*trial_len],(n_trials,trial_len))
 
-            
+
         n_samples,n_time = X.shape
-        
+
         # multi class labels
         Labels_mc = np.zeros((n_samples,n_time,classes))
         for c in range(classes):
             Labels_mc[:,:,c] = Labels==c
         Labels = Labels_mc
 
-        # data shuffling 
+        # data shuffling
         randind = np.random.permutation(n_samples)
         X = X[randind,:]
         Y = Y[randind,:]
         Labels = Labels[randind,:]
-        
+
         # check if number of timebins is multiple of the maxpooling kernel size squared, otherwise cut:
         n_time2 = X.shape[1]
         if n_time%(self.mp**2)!=0:
             X = X[:,:int(np.floor(n_time/(self.mp**2))*(self.mp**2))]
             Y = Y[:,:int(np.floor(n_time/(self.mp**2))*(self.mp**2))]
             Labels = Labels[:,:int(np.floor(n_time/(self.mp**2))*(self.mp**2)),:]
-     
+
         # validation and training set
         # 50 samples of training data used for validation
         n_validation = self.val_samples #fixed number of validation samples independent of number of training samples
@@ -154,7 +155,7 @@ class DNN():
                 Ytrain = np.concatenate((Ytrain.copy(),y2),0)
                 Ltrain = np.concatenate((Ltrain,Ltrain),0)
 
-                          
+
         n_training = Xtrain.shape[0]
 
         if self.doDiff==True:
@@ -184,12 +185,12 @@ class DNN():
             Yin_train = Ytrain
             Xin_val = Xval
             Yin_val = Yval
-            
+
         # input matrix:
         Vtrain = np.tile((Xin_train,Yin_train),1)
         Vtrain = np.swapaxes(np.swapaxes(Vtrain,0,1),1,2)
         Vval = np.tile((Xin_val,Yin_val),1)
-        Vval = np.swapaxes(np.swapaxes(Vval,0,1),1,2) 
+        Vval = np.swapaxes(np.swapaxes(Vval,0,1),1,2)
         # torch Variables:
         Vtrain = Variable(torch.FloatTensor(Vtrain).unsqueeze(1),requires_grad=False)
         Ltrain = np.swapaxes(Ltrain,1,2)
@@ -197,17 +198,17 @@ class DNN():
         Vval = Variable(torch.FloatTensor(Vval).unsqueeze(1),requires_grad=False)
         Lval = np.swapaxes(Lval,1,2)
         Lval = Variable(torch.FloatTensor(Lval.astype(float)),requires_grad=False)
-        
+
         # model
         self.net.apply(weights_init)
         self.net.train()
         # send to gpu is cuda enabled
-        
+
         if self.use_gpu:
             self.net.cuda()
             Vval = Vval.cuda()
             Lval = Lval.cuda()
-            
+
         # learning parameters
         criterion = MCLoss()
         optimizer = optim.Adam(self.net.parameters(),lr=self.lr)
@@ -233,20 +234,20 @@ class DNN():
         getting_worse = 0
 
         print('Training. Please wait.')
-        
+
         while epoch<=self.max_iter:
 
             # shuffle training data in each epoch:
             rand_ind = torch.randperm(n_training)
             Vtrain = Vtrain[rand_ind,:]
             Ltrain = Ltrain[rand_ind,:]
-            
+
             loss_train = np.zeros(iters)
-            for niter in range(iters):    
+            for niter in range(iters):
                 # Minibatches:
                 if niter!=iters-1:
                     Vbatch = Vtrain[niter*batchsize:(niter+1)*batchsize,:]
-                    Lbatch = Ltrain[niter*batchsize:(niter+1)*batchsize,:]        
+                    Lbatch = Ltrain[niter*batchsize:(niter+1)*batchsize,:]
                 else:
                     Vbatch = Vtrain[niter*batchsize:,:]
                     Lbatch = Ltrain[niter*batchsize:,:]
@@ -254,25 +255,25 @@ class DNN():
                     Vbatch = Vbatch.cuda()
                     Lbatch = Lbatch.cuda()
                 optimizer.zero_grad()
-                
+
                 out = self.net(Vbatch,key)[0] # network output
                 loss = criterion(out,Lbatch) #loss
                 reg_loss = 0
                 for param in self.net.parameters():
                     reg_loss += torch.sum(param**2) #L2 penalty
-            
+
                 loss += l2_lambda * reg_loss
                 loss_train[niter] = loss.data.cpu().numpy() #loss storage in each iteration
                 loss.backward() #back propagation
                 optimizer.step()
-                
+
             Loss_train.append(np.mean(loss_train)) #store training loss
             #plt.plot(Loss_train)
             #plt.title(str(epoch))
-            
+
             #print('Iteration: '+str(epoch)+'/'+str(self.max_iter))
             #display.clear_output(wait=True)
-            
+
             # test in every epoch:
             # validation loss
             out_val = self.net(Vval,key)[0]
@@ -284,7 +285,7 @@ class DNN():
             Loss_val.append(loss_val.data.cpu().numpy())
             #plt.plot(Loss_val)
             #plt.show()
-            
+
             if len(Loss_val)>3:
                 if Loss_val[-1]<float(np.mean(Loss_val[-4:-1])): #validation performance better than average over last 3
                     getting_worse = 0
@@ -294,33 +295,33 @@ class DNN():
                         save_weights = True
                     else:
                         self.net.load_state_dict(uneye_weights) #load weights of last time when loss was lower
-                        
+
                 else: #validation performance worse than last
                     #learning rate decay:
                     optimizer = lr_decay(optimizer) #reduce learning rate by a fixed step
-                    getting_worse += 1 
+                    getting_worse += 1
                     self.net.load_state_dict(uneye_weights) #load weights of last time when loss was lower
             else:
                 best_loss = np.min(Loss_val)
                 uneye_weights = self.net.state_dict()
-                
+
             if getting_worse>3:
                 # stop the training if the loss is increasing for the validation set
                 self.net.load_state_dict(uneye_weights) #get back best weights
                 print('Early stopping at epoch '+str(epoch-1)+' before overfitting occurred.')
-                epoch = self.max_iter+1 
+                epoch = self.max_iter+1
             epoch += 1
-  
+
         # validate after training to ensure saving best weights
         out_val = self.net(Vval,key)[0]
-        # added this to convert values to numpy in GPU setting: 
+        # added this to convert values to numpy in GPU setting:
         if self.use_gpu:
             # convert from CUDA to cpu memory
             #out_val = out_val.cpu().detach()
             loss_val = criterion(out_val,Lval).data.cpu().detach().numpy()
         else:
             loss_val = criterion(out_val,Lval).data.numpy()
-        if loss_val<best_loss:            
+        if loss_val<best_loss:
             uneye_weights = self.net.state_dict()
             save_weights = True
         # save weights
@@ -336,28 +337,28 @@ class DNN():
         else:
             print("Model parameters could not be saved due to early overfitting. Try to reduce learning rate or increase number of training samples.")
 
-        
+
         self.loss_val = Loss_val
         self.loss_train = Loss_train
 
         return self
-        
-        
-        
-    def predict(self,X,Y):       
+
+
+
+    def predict(self,X,Y):
         '''
         Predict Saccades with trained weights.
-        
+
         Parameters
         ----------
         X,Y: array-like, shape: {(n_timepoints),(n_samples, n_timepoints)}, horizontal and vertical eye positions in degree
-                
+
         Output
         ------
         Pred: array-like, shape: {(classes, n_timepoints),(n_samples, n_timepoints)}, class prediction, values in range [0 classes-1], fixation=0, saccades=1
-        
+
         Prob: array-like, shape: {(classes, n_timepoints),(n_samples, classes, n_timepoints)}, class probabilits (network softmax output)
-        
+
         '''
         n_dim = len(X.shape)
 
@@ -372,13 +373,13 @@ class DNN():
         w = torch.load(w_name)
         classes = w['c7.weight'].shape[0]
         self.net = UNet(classes,self.ks,self.mp)
-        
+
         if n_dim==1:
             X = np.atleast_2d(X)
             Y = np.atleast_2d(Y)
         if X.shape[1]<25:
             raise ValueError('Input is to small along dimension 1. Expects input of the form (n_samples x n_bins) or (n_bins).')
-        
+
         n_samples,n_time = X.shape
 
         if self.doDiff==True:
@@ -396,37 +397,37 @@ class DNN():
             # use input as it is
             Xin = X
             Yin = Y
-            
+
         # input matrix:
         V = np.tile((Xin,Yin),1)
         V = np.swapaxes(np.swapaxes(V,0,1),1,2)
         V = Variable(torch.FloatTensor(V).unsqueeze(1),requires_grad=False)
-        
+
         # load pretrained model
-        self.net.load_state_dict(w)   
+        self.net.load_state_dict(w)
         self.net.eval()
-        
+
         # send to gpu if cuda enabled
         if self.use_gpu:
             self.net.cuda()
-        
+
         #predict in batches so that batchnorm works
         batchsize = 50
         iters = int(np.ceil(n_samples/batchsize))
         n_time2 = V.size()[2]
         Pred = np.zeros((n_samples,n_time))
         Prob = np.zeros((n_samples,classes,n_time))
-        for niter in range(iters):    
+        for niter in range(iters):
             # Minibatches:
             if niter!=iters-1:
                 Vbatch = V[niter*batchsize:(niter+1)*batchsize,:]
             else:
                 Vbatch = V[niter*batchsize:,:]
-                
+
             # send to gpu if cuda is enabled
             if self.use_gpu:
                 Vbatch = Vbatch.cuda()
-                
+
             # check if number of timepoints is a multiple of the maxpooling kernel size squared:
             remaining = n_time2%(self.mp**2)
             # if not, evaluate segment-wise and concatenante output
@@ -437,17 +438,17 @@ class DNN():
                 Out1 = self.net(Vbatch1,['out'])[0].data.cpu().numpy()
                 Out2 = self.net(Vbatch2,['out'])[0].data.cpu().numpy()
                 Out = np.concatenate((Out1,Out2[:,:,-remaining:]),2)
-            
+
             else:
-                Out = self.net(Vbatch,['out'])[0].data.cpu().numpy() 
-            
+                Out = self.net(Vbatch,['out'])[0].data.cpu().numpy()
+
             # Prediction:
             if classes==2:
                 Prediction = binary_prediction(Out[:,1,:],
                                                self.sampfreq,
                                                min_sacc_dist=self.min_sacc_dist,
                                                min_sacc_dur=int(self.min_sacc_dur/(1000/self.sampfreq)))
-                
+
             else:
                 Prediction = np.argmax(Out,1)
             Probability = Out
@@ -459,38 +460,38 @@ class DNN():
                 Prob[niter*batchsize:,:] = Probability
         # if input one dimensional, reduce back to one dimension:
         if n_dim==1:
-            Pred = Pred[0,:]   
+            Pred = Pred[0,:]
             Prob = Prob[0,:]
-        
-        
-        return Pred,Prob 
-    
-    
-    def test(self,X,Y,Labels):       
+
+
+        return Pred,Prob
+
+
+    def test(self,X,Y,Labels):
         '''
         Predict Saccades with trained weights and test performance against given labels.
 
         Parameters
         ----------
         X,Y: array-like, shape: {(n_timepoints),(n_samples, n_timepoints)}, horizontal and vertical eye positions in degree
-        
+
         Labels: array-like, shape: {(n_timepoints),(n_samples, n_timepoints)}, class labels in range [0 classes-1], fixation=0, saccades=1
-                
+
         Output
         ------
         Pred: array-like, shape: {(classes, n_timepoints),(n_samples, n_timepoints)}, class prediction, values in range [0 classes-1], fixation=0, saccades=1
-        
+
         Prob: array-like, shape: {(classes, n_timepoints),(n_samples, classes, n_timepoints)}, class probabilits (network softmax output)
-        
-        Performance: dict with keys: 
-            {'kappa': cohen's kappa values for all classes, 
+
+        Performance: dict with keys:
+            {'kappa': cohen's kappa values for all classes,
             'fpr': false positive rate (saccades),
             'tpr': true positive rate (saccades),
             'auroc': area under the ROC (saccades),
             'f1': harmonic mean of precision and recall (saccades)
             'on': onset difference in timebins for true positive saccades
             'off': offset difference in timebins for true positive saccades }
-            
+
         '''
         # determine number of classes
         # check if weights_name is absolute path
@@ -503,16 +504,16 @@ class DNN():
         w = torch.load(w_name)
         classes = w['c7.weight'].shape[0]
         self.net = UNet(classes,self.ks,self.mp)
-        
+
         n_dim = len(X.shape)
         if n_dim==1:
             X = np.atleast_2d(X)
             Y = np.atleast_2d(Y)
         if X.shape[1]<25:
             raise ValueError('Input is to small along dimension 1. Expects input of the form (n_samples x n_bins) or (n_bins).')
-        
+
         n_samples,n_time = X.shape
-   
+
         if self.doDiff==True:
             # Velocity:
             Xdiff = np.diff(X,axis=-1)
@@ -528,20 +529,20 @@ class DNN():
             # use input as it is
             Xin = X
             Yin = Y
-            
+
         # input matrix:
         V = np.tile((Xin,Yin),1)
         V = np.swapaxes(np.swapaxes(V,0,1),1,2)
         V = Variable(torch.FloatTensor(V).unsqueeze(1),requires_grad=False)
-        
+
         # load pretrained model
-        self.net.load_state_dict(w)   
+        self.net.load_state_dict(w)
         self.net.eval()
-        
+
         # send to gpu if cuda enabled
         if self.use_gpu:
             self.net.cuda()
-            
+
         #predict in batches
         batchsize = 50
         iters = int(np.ceil(n_samples/batchsize))
@@ -551,18 +552,18 @@ class DNN():
             Prob = np.zeros((n_samples,n_time))
         else:
             Prob = np.zeros((n_samples,classes,n_time))
-            
-        for niter in range(iters):    
+
+        for niter in range(iters):
             # Minibatches:
             if niter!=iters-1:
                 Vbatch = V[niter*batchsize:(niter+1)*batchsize,:]
             else:
                 Vbatch = V[niter*batchsize:,:]
-                
+
             # send to gpu if cuda is enabled
             if self.use_gpu:
                 Vbatch = Vbatch.cuda()
-                
+
             # check if number of timepoints is a multiple of the maxpooling kernel size squared:
             remaining = n_time2%(self.mp**2)
             if remaining!=0:
@@ -572,11 +573,11 @@ class DNN():
                 Out1 = self.net(Vbatch1,['out'])[0].data.cpu().numpy()
                 Out2 = self.net(Vbatch2,['out'])[0].data.cpu().numpy()
                 Out = np.concatenate((Out1,Out2[:,:,-remaining:]),2)
-            
+
             else:
                 Out = self.net(Vbatch,['out'])[0].data.cpu().numpy()
-            
-            
+
+
             # Prediction:
             if classes==2:
                 Prediction = binary_prediction(Out[:,1,:],
@@ -587,17 +588,17 @@ class DNN():
             else:
                 Prediction = np.argmax(Out,1)
                 Probability = Out
-                
+
             if niter!=iters-1:
                 Pred[niter*batchsize:(niter+1)*batchsize,:] = Prediction
                 Prob[niter*batchsize:(niter+1)*batchsize,:] = Probability
             else:
                 Pred[niter*batchsize:,:] = Prediction
                 Prob[niter*batchsize:,:] = Probability
-        
+
         # PERFORMANCE
         # Cohen's Kappa, AUROC and f1
-        if classes==2: 
+        if classes==2:
             # if only two target classes (fixation and saccade), calculate performance measures for saccade detection
             pred = Pred==1
             Kappa = cohenskappa((Labels==1).astype(float).flatten(),pred.astype(float).flatten())
@@ -616,9 +617,9 @@ class DNN():
         if true_pos + false_neg + false_pos == 0:
             f1 = np.nan
         else:
-            f1 = (2 * true_pos)/(2 * true_pos + false_neg + false_pos)    
+            f1 = (2 * true_pos)/(2 * true_pos + false_neg + false_pos)
         print('F1:',np.round(f1,3))
-        
+
         Performance = {
             'kappa': Kappa,
             'f1': f1,
@@ -628,50 +629,50 @@ class DNN():
             'false_pos':false_pos,
             'false_neg':false_neg
             }
-        
+
         # if input one dimensional, reduce back to one dimension:
         if n_dim==1:
-            Pred = Pred[0,:]   
+            Pred = Pred[0,:]
             Prob = Prob[0,:]
-        
-        
+
+
         return Pred, Prob, Performance
-    
-    
+
+
     def crossvalidate(self,X,Y,Labels,X_val,Y_val,Labels_val,Labels_test=None,K=10):
         '''
         Use K-fold cross validation.
         Measuring performance in terms of Cohen's Kappa, F1 and AUROC.
-        
+
         Parameters
         ----------
         X,Y: array-like, shape: {(n_timepoints),(n_samples, n_timepoints)}, horizontal and vertical eye positions in degree
-        
+
         Labels: array-like, shape: {(n_timepoints),(n_samples, n_timepoints)}, class labels in range [0 classes-1], fixation=0, saccades=1
-        
+
         X_val,Y_val: array-like, shape: {(n_timepoints),(n_samples, n_timepoints)}, additional horizontal and vertical eye positions in degree for validation
-        
+
         Labels_val: array-like, shape: {(n_timepoints),(n_samples, n_timepoints)}, additional class labels in range [0 classes-1], fixation=0, saccades=1 for validation
-        
+
         Labels_test: array-like, shape: {(n_timepoints),(n_samples, n_timepoints)}, if test Labels different from training labels (for training with missing labels only), optional
-        
+
         K: float, number of folds of cross validation
-                
-        
+
+
         Output
         ------
 
-        Performance: dict with keys: 
-            {'kappa': cohen's kappa values for all classes, 
+        Performance: dict with keys:
+            {'kappa': cohen's kappa values for all classes,
             'fpr': false positive rate (saccades),
             'tpr': true positive rate (saccades),
             'auroc': area under the ROC (saccades),
             'f1': harmonic mean of precision and recall (saccades)
             'on': onset difference in timebins for true positive saccades
             'off': offset difference in timebins for true positive saccades }
-            
-        
-        ''' 
+
+
+        '''
 
         # check if data has right dimensions (2)
         xdim,ydim,ldim = X.ndim,Y.ndim,Labels.ndim
@@ -694,7 +695,7 @@ class DNN():
         n_samples,n_time = X.shape
         classes = len(np.unique(Labels[np.isnan(Labels)==False]))
         self.net = UNet(classes,self.ks,self.mp)
-        
+
         Labels_mc = np.zeros((n_samples,n_time,classes))
         Labels_mc_val = np.zeros((Labels_val.shape[0],n_time,classes))
         for c in range(classes):
@@ -704,8 +705,8 @@ class DNN():
         Labels_val = Labels_mc_val
 
         if Labels_test is None: #if no alternative test labels given, use training labels for testing
-            Labels_test = Labels.copy() 
-      
+            Labels_test = Labels.copy()
+
         # check if number of timebins is multiple of the maxpooling kernel size squared, otherwise cut:
         fac = (self.mp**2)
         if n_time%fac!=0:
@@ -730,20 +731,20 @@ class DNN():
         Ydiff = np.diff(Y_val,axis=-1)
         Ydiff[np.isnan(Ydiff)] = 0
         Ydiff[np.isinf(Ydiff)] = self.inf_correction
-        Ydiff = np.concatenate((np.zeros((n_val_samp,1)),Ydiff),1) 
+        Ydiff = np.concatenate((np.zeros((n_val_samp,1)),Ydiff),1)
         # input matrix:
         V = np.tile((Xdiff,Ydiff),1)
-        V = np.swapaxes(np.swapaxes(V,0,1),1,2) 
+        V = np.swapaxes(np.swapaxes(V,0,1),1,2)
         # torch Variable:
         Vval = Variable(torch.FloatTensor(V).unsqueeze(1),requires_grad=False)
         Lval = np.swapaxes(Lval,1,2)
         Lval = Variable(torch.FloatTensor(Lval.astype(float)),requires_grad=False)
-        
+
         n_test = int(n_samples/K)
         np.random.seed(1) # fixed seed for comparable cross validations
-        
+
         indices = np.random.permutation(n_samples)
-        # Cross Validation:  
+        # Cross Validation:
 
         Kappa = np.zeros((K,classes))
         F1 = np.zeros(K)
@@ -765,13 +766,13 @@ class DNN():
             Ytrain = Y[ind_train,:].copy()
             Xtest = X[ind_test,:].copy()
             Ytest = Y[ind_test,:].copy()
-            
-            Ltrain = Labels[ind_train,:].copy()  
+
+            Ltrain = Labels[ind_train,:].copy()
             Ltest = Labels_test[ind_test,:].copy()
 
             Ltrain = np.swapaxes(Ltrain,1,2)
             Ltest = np.swapaxes(Ltest,1,2)
-                
+
             # data augmentation: signal rotation
             theta = np.arange(0.25,2,0.5)
             r = np.sqrt(Xtrain**2+Ytrain**2)
@@ -783,7 +784,7 @@ class DNN():
                 Xtrain = np.concatenate((Xtrain.copy(),x2),0)
                 Ytrain = np.concatenate((Ytrain.copy(),y2),0)
                 Ltrain = np.concatenate((Ltrain,Ltrain),0)
-            
+
             # Prepare Training data:
             n_training = Xtrain.shape[0]
             # differentiated signal:
@@ -794,14 +795,14 @@ class DNN():
             Ydiff = np.diff(Ytrain,axis=-1)
             Ydiff[np.isnan(Ydiff)] = 0
             Ydiff[np.isinf(Ydiff)] = 1.5
-            Ydiff = np.concatenate((np.zeros((n_training,1)),Ydiff),1) 
+            Ydiff = np.concatenate((np.zeros((n_training,1)),Ydiff),1)
             # input matrix:
             V = np.tile((Xdiff,Ydiff),1)
-            V = np.swapaxes(np.swapaxes(V,0,1),1,2) 
+            V = np.swapaxes(np.swapaxes(V,0,1),1,2)
             # torch Variable:
             Vtrain = Variable(torch.FloatTensor(V).unsqueeze(1),requires_grad=False)
             Ltrain = Variable(torch.FloatTensor(Ltrain.astype(float)),requires_grad=False)
-            
+
             # Prepare Test data:
             n_test_samp = Xtest.shape[0]
             # differentiated signal:
@@ -812,72 +813,72 @@ class DNN():
             Ydiff = np.diff(Ytest,axis=-1)
             Ydiff[np.isnan(Ydiff)] = 0
             Ydiff[np.isinf(Ydiff)] = 1.5
-            Ydiff = np.concatenate((np.zeros((n_test_samp,1)),Ydiff),1) 
+            Ydiff = np.concatenate((np.zeros((n_test_samp,1)),Ydiff),1)
             # input matrix:
             V = np.tile((Xdiff,Ydiff),1)
-            V = np.swapaxes(np.swapaxes(V,0,1),1,2) 
+            V = np.swapaxes(np.swapaxes(V,0,1),1,2)
             # torch Variable:
             Vtest = Variable(torch.FloatTensor(V).unsqueeze(1),requires_grad=False)
             Ltest = Ltest.astype(float)
-            
+
             # model
             self.net.apply(weights_init)
             self.net.train()
-            
+
             # send to gpu is cuda enabled
             if self.use_gpu:
                 self.net.cuda()
                 Vtest = Vtest.cuda()
                 Vval = Vval.cuda()
                 Lval = Lval.cuda()
-                
+
             # learning parameters
             criterion = MCLoss()
             optimizer = optim.Adam(self.net.parameters(),lr=self.lr)
-            l2_lambda = 0.001     
+            l2_lambda = 0.001
             iters = 10 #iterations per epoch
             batchsize = int(np.floor(n_training/iters))
-                
+
             epoch = 1
             L = [] #validation loss storage
             Loss_train = [] #training loss storage
             key = ['out'] #layer to output
             getting_worse = 0
-            while epoch<self.max_iter:                
+            while epoch<self.max_iter:
                 # shuffle training data in each epoch:
                 rand_ind = torch.randperm(n_training)
                 Vtrain = Vtrain[rand_ind,:]
                 Ltrain = Ltrain[rand_ind,:]
                 loss_train = np.zeros(iters) #preallocate vector for loss storage
-                for niter in range(iters):    
+                for niter in range(iters):
                     # Minibatches:
                     if niter!=iters-1:
                         Vbatch = Vtrain[niter*batchsize:(niter+1)*batchsize,:]
-                        Lbatch = Ltrain[niter*batchsize:(niter+1)*batchsize,:]        
+                        Lbatch = Ltrain[niter*batchsize:(niter+1)*batchsize,:]
                     else:
                         Vbatch = Vtrain[niter*batchsize:,:]
                         Lbatch = Ltrain[niter*batchsize:,:]
-                        
+
                     # send to gpu if cuda is enabled
                     if self.use_gpu:
                         Vbatch = Vbatch.cuda()
                         Lbatch = Lbatch.cuda()
-                        
+
                     optimizer.zero_grad()
                     out = self.net(Vbatch,key)[0]
                     loss = criterion(out,Lbatch)
                     loss_train[niter] = loss.data.cpu().numpy() #store loss in each iteration
-                    
+
                     reg_loss = 0
                     for param in self.net.parameters():
                         reg_loss += torch.sum(param**2)
-                
+
                     loss += l2_lambda * reg_loss
                     loss.backward()
                     optimizer.step()
-                    
+
                 Loss_train.append(np.mean(loss_train)) #append average loss over all iterations
-                               
+
                 # validate every epoch:
                 # validation loss
                 out_val = self.net(Vval,key)[0]
@@ -896,23 +897,23 @@ class DNN():
                             save_weights = True
                         else:
                             self.net.load_state_dict(uneye_weights) #load best weights
-                            
+
                     else: #validation performance worse than last
                         #learning rate decay:
                         optimizer = lr_decay(optimizer) #reduce learning rate by a fixed step
-                        getting_worse +=1 
+                        getting_worse +=1
                         self.net.load_state_dict(uneye_weights) #load best weights
                 else:
                     best_loss = np.min(L)
                     uneye_weights = self.net.state_dict()
-                    
+
                 if getting_worse>3:
                     epoch = self.max_iter+1 # stop the training if the loss is increasing for the validation set
-                    self.net.load_state_dict(uneye_weights) 
-                    print('early stop')  
-                    
+                    self.net.load_state_dict(uneye_weights)
+                    print('early stop')
+
                 epoch += 1
-                
+
             # Evaluate on test set
             self.net.eval()
             out_test = self.net(Vtest,key)[0]
@@ -940,24 +941,24 @@ class DNN():
 
             # FREE UP GPU
             del optimizer,criterion,Vtrain,Ltrain,Vtest,out,out_val,out_test,loss
-        
+
             # save weights of last validation
             uneye_weights = self.net.state_dict()
             out_folder = './crossvalidation/'+self.weights_name
             if not os.path.exists(out_folder):
                 os.makedirs(out_folder)
-            
+
             # weights to cpu
             if self.use_gpu:
                 Keys = list(uneye_weights.keys())
                 for k,key in enumerate(Keys):
                     uneye_weights[key] = uneye_weights[key].cpu()
-                    
+
             torch.save(uneye_weights,os.path.join(out_folder,'crossvalidation_'+str(i)))
-        
+
         print("Weights saved to",self.weights_name)
-        return 
-    
-    
-    
+        return
+
+
+
 
