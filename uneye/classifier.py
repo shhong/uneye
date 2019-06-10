@@ -19,6 +19,18 @@ import torch.optim as optim
 from sklearn.metrics import cohen_kappa_score as cohenskappa
 import matplotlib.pyplot as plt
 
+class SimpleLogWriter(object):
+    def __init__(self):
+        super().__init__()
+        self.n_iter = -1
+
+    def add_scalar(self, name, val, n_iter):
+        if n_iter != self.n_iter:
+            self.n_iter = n_iter
+            print('\nIteration: {}'.format(n_iter), end=", ")
+        print("{} = {}".format(name, val), end=", ")
+
+
 ###############################
 ############ U'n'Eye: ###########
 ###############################
@@ -54,7 +66,7 @@ class DNN():
                  lr=0.001, weights_name='weights',
                  min_sacc_dist=1,min_sacc_dur=6,augmentation=True,
                  ks=5,mp=5,inf_correction=1.5,val_samples=30,
-                 doDiff=True, use_cpu=None):
+                 doDiff=True, use_cpu=None, log_writer=None):
 
         if max_iter<10:
             max_iter = 10
@@ -72,6 +84,11 @@ class DNN():
         self.inf_correction = inf_correction
         self.val_samples = val_samples
         self.doDiff = doDiff
+        if log_writer is None:
+            self.log_writer = SimpleLogWriter()
+        else:
+            self.log_writer = log_writer
+
 
     def train(self,X,Y,Labels,seed=1):
         '''
@@ -284,9 +301,8 @@ class DNN():
             #plt.plot(Loss_val)
             #plt.show()
 
-            print('Iteration: '+str(epoch)+'/'+str(self.max_iter),
-                   ' Loss_train=' + str(Loss_train[-1]),
-                   ' Loss_val=' + str(Loss_val[-1]))
+            self.log_writer.add_scalar("Loss/Train", Loss_train[-1], epoch)
+            self.log_writer.add_scalar("Loss/Validate", Loss_val[-1], epoch)
             #display.clear_output(wait=True)
 
             if len(Loss_val)>3:
